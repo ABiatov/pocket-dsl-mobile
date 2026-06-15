@@ -99,6 +99,30 @@ class SqlDelightDictionaryRepositoryTest {
     }
 
     @Test
+    fun prefixSuggestionsEscapeSqlLikeWildcards() {
+        val repository = newRepository()
+        val dictionaryId = repository.insertDictionaryMetadata(sampleMetadata())
+        val entryIds = repository.insertEntries(
+            dictionaryId = dictionaryId,
+            entries = listOf(
+                NewDictionaryEntry("a_1", " [trn]literal underscore[/trn]", "<html>a_1</html>"),
+                NewDictionaryEntry("ab1", " [trn]plain letters[/trn]", "<html>ab1</html>"),
+                NewDictionaryEntry("a%2", " [trn]literal percent[/trn]", "<html>a%2</html>"),
+                NewDictionaryEntry("ax2", " [trn]plain wildcard match[/trn]", "<html>ax2</html>"),
+            ),
+        )
+
+        assertEquals(
+            listOf(DictionarySuggestion(entryIds[0], dictionaryId, "a_1")),
+            repository.suggest("a_", limit = 10),
+        )
+        assertEquals(
+            listOf(DictionarySuggestion(entryIds[2], dictionaryId, "a%2")),
+            repository.suggest("a%", limit = 10),
+        )
+    }
+
+    @Test
     fun storesRawDslAndHtml() {
         val repository = newRepository()
         val dictionaryId = repository.insertDictionaryMetadata(sampleMetadata())

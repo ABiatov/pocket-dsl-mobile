@@ -56,13 +56,13 @@ selectByExactWord:
 SELECT *
 FROM entries
 WHERE normalizedHeadword = ?
-ORDER BY headword;
+ORDER BY normalizedHeadword, headword, dictionaryId, id;
 
 suggest:
 SELECT id, dictionaryId, headword
 FROM entries
-WHERE normalizedHeadword LIKE ?
-ORDER BY normalizedHeadword
+WHERE normalizedHeadword LIKE ? ESCAPE '\'
+ORDER BY normalizedHeadword, headword, dictionaryId, id
 LIMIT ?;
 
 insertDictionary:

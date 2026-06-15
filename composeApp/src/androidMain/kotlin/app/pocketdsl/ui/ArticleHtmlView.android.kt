@@ -25,6 +25,10 @@ actual fun ArticleHtmlView(
                 settings.allowUniversalAccessFromFileURLs = false
                 settings.domStorageEnabled = false
                 settings.databaseEnabled = false
+                settings.blockNetworkLoads = true
+                settings.blockNetworkImage = true
+                settings.loadsImagesAutomatically = false
+                settings.setSupportMultipleWindows(false)
                 webViewClient = LockedDownWebViewClient()
             }
         },

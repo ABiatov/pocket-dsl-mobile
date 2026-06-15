@@ -1,21 +1,18 @@
 package app.pocketdsl
 
-import android.app.Activity
-import android.content.Intent
 import android.os.Bundle
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import app.pocketdsl.ui.App
 
 class MainActivity : ComponentActivity() {
     private lateinit var model: AndroidPocketDslAppModel
 
     private val openDictionary = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult(),
-    ) { result ->
-        val uri = result.data?.data
-        if (result.resultCode == Activity.RESULT_OK && uri != null) {
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
             Thread {
                 model.importFile(contentResolver, uri)
             }.start()
@@ -28,7 +25,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             App(
                 state = model.state,
-                onImportClick = { openDictionary.launch(openDictionaryIntent()) },
+                onImportClick = { openDictionary.launch(arrayOf("*/*")) },
                 onQueryChange = model::onQueryChange,
                 onSearchSubmit = model::searchSubmitted,
                 onSuggestionClick = model::suggestionSelected,
@@ -42,21 +39,4 @@ class MainActivity : ComponentActivity() {
         model.close()
         super.onDestroy()
     }
-
-    private fun openDictionaryIntent(): Intent =
-        Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "*/*"
-            putExtra(
-                Intent.EXTRA_MIME_TYPES,
-                arrayOf(
-                    "text/plain",
-                    "application/octet-stream",
-                    "application/gzip",
-                    "application/x-gzip",
-                    "application/x-bzip2",
-                    "application/x-tar",
-                ),
-            )
-        }
 }

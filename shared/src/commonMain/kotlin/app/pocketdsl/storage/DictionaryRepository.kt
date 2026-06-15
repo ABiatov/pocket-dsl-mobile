@@ -128,8 +128,8 @@ class SqlDelightDictionaryRepository(
 
     override fun suggest(prefix: String, limit: Long): List<DictionarySuggestion> =
         queries.suggest(
-            normalizedHeadword = "${WordNormalizer.normalize(prefix)}%",
-            value_ = limit,
+            WordNormalizer.normalize(prefix).toSqlLikePrefix(),
+            limit,
         ).executeAsList().map(::mapSuggestion)
 
     override fun addFavorite(entryId: Long, createdAt: Long) {
@@ -190,4 +190,19 @@ class SqlDelightDictionaryRepository(
             entryId = history.entryId,
             createdAt = history.createdAt,
         )
+
+    private fun String.toSqlLikePrefix(): String =
+        buildString {
+            this@toSqlLikePrefix.forEach { character ->
+                if (character == SQL_LIKE_ESCAPE || character == '%' || character == '_') {
+                    append(SQL_LIKE_ESCAPE)
+                }
+                append(character)
+            }
+            append('%')
+        }
+
+    private companion object {
+        const val SQL_LIKE_ESCAPE = '\\'
+    }
 }
