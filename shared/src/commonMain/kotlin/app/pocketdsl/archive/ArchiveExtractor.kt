@@ -1,5 +1,5 @@
 package app.pocketdsl.archive
 
 interface ArchiveExtractor {
-    suspend fun listEntries(sourcePath: String): List<ArchiveEntry>
+    fun extract(bytes: ByteArray): List<ArchiveEntry>
 }

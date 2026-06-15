@@ -29,8 +29,13 @@ kotlin {
             implementation(kotlin("test"))
         }
 
+        jvmMain.dependencies {
+            implementation(libs.commons.compress)
+        }
+
         jvmTest.dependencies {
             implementation(libs.sqldelight.sqlite.driver)
+            implementation(libs.commons.compress)
         }
     }
 }
