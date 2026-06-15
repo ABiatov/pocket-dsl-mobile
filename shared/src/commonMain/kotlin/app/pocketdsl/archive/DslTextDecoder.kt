@@ -1,6 +1,6 @@
 package app.pocketdsl.archive
 
-internal object DslTextDecoder {
+object DslTextDecoder {
     fun decode(bytes: ByteArray): String =
         when {
             bytes.startsWith(UTF_16_LE_BOM) -> decodeUtf16(bytes, offset = UTF_16_LE_BOM.size, littleEndian = true)

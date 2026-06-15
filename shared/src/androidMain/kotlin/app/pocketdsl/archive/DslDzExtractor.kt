@@ -3,10 +3,6 @@ package app.pocketdsl.archive
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
-import java.nio.ByteBuffer
-import java.nio.charset.CharacterCodingException
-import java.nio.charset.CodingErrorAction
-import java.nio.charset.StandardCharsets
 import java.util.zip.GZIPInputStream
 
 actual class DslDzExtractor actual constructor(
@@ -21,7 +17,7 @@ actual class DslDzExtractor actual constructor(
             throw DslDzExtractionException("Invalid DSL.DZ gzip data", cause)
         }
 
-        return decodeUtf8(decompressed)
+        return decodeDslText(decompressed)
     }
 
     private fun ensureCompressedSize(bytes: ByteArray) {
@@ -60,15 +56,10 @@ actual class DslDzExtractor actual constructor(
         }
     }
 
-    private fun decodeUtf8(bytes: ByteArray): String {
-        val decoder = StandardCharsets.UTF_8.newDecoder()
-            .onMalformedInput(CodingErrorAction.REPORT)
-            .onUnmappableCharacter(CodingErrorAction.REPORT)
-
-        return try {
-            decoder.decode(ByteBuffer.wrap(bytes)).toString()
-        } catch (cause: CharacterCodingException) {
-            throw DslDzExtractionException("Decompressed DSL text is not valid UTF-8", cause)
+    private fun decodeDslText(bytes: ByteArray): String =
+        try {
+            DslTextDecoder.decode(bytes)
+        } catch (cause: DslTextDecodingException) {
+            throw DslDzExtractionException("Decompressed DSL text is not valid UTF-8 or UTF-16 with BOM", cause)
         }
-    }
 }

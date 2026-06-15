@@ -32,6 +32,11 @@ kotlin {
             implementation(kotlin("test"))
         }
 
+        androidMain.dependencies {
+            implementation(libs.sqldelight.android.driver)
+            implementation(libs.commons.compress)
+        }
+
         jvmMain.dependencies {
             implementation(libs.commons.compress)
         }
