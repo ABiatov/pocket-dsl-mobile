@@ -3,6 +3,7 @@ package app.pocketdsl.importer
 import app.pocketdsl.archive.ArchiveEntry
 import app.pocketdsl.archive.ArchiveExtractor
 import app.pocketdsl.archive.DslDzExtractor
+import app.pocketdsl.archive.DslTextDecoder
 
 class DictionaryPackageImporter(
     private val archiveExtractor: ArchiveExtractor,
@@ -68,7 +69,7 @@ class DictionaryPackageImporter(
 
             val imported = try {
                 val text = when (candidate.kind) {
-                    PackageDictionaryKind.DSL -> candidate.entry.bytes.decodeToString(throwOnInvalidSequence = true)
+                    PackageDictionaryKind.DSL -> DslTextDecoder.decode(candidate.entry.bytes)
                     PackageDictionaryKind.DSL_DZ -> dslDzExtractor.extractToText(candidate.entry.bytes)
                 }
 

@@ -1,3 +1,6 @@
+import java.io.File
+import org.gradle.api.tasks.testing.Test
+
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.library)
@@ -54,5 +57,30 @@ sqldelight {
         create("PocketDslDatabase") {
             packageName.set("app.pocketdsl.db")
         }
+    }
+}
+
+val jvmTest by tasks.existing(Test::class) {
+    exclude("**/LocalDictionaryPackageImportSmokeTest.class")
+}
+
+tasks.register<Test>("smokeImportLocalDictionary") {
+    description = "Runs the JVM-only local .tar.bz2 dictionary package import smoke test."
+    group = "verification"
+
+    testClassesDirs = jvmTest.get().testClassesDirs
+    classpath = jvmTest.get().classpath
+    include("**/LocalDictionaryPackageImportSmokeTest.class")
+
+    val archivePath = providers.gradleProperty("dictionaryArchive")
+        .map { path ->
+            val file = File(path)
+            if (file.isAbsolute) file.path else rootProject.file(path).path
+        }
+        .orElse(rootProject.file("dict-example/enruen-content-1.1.tar.bz2").path)
+    systemProperty("pocketdsl.localDictionaryArchive", archivePath.get())
+
+    testLogging {
+        showStandardStreams = true
     }
 }

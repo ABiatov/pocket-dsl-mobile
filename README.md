@@ -6,7 +6,7 @@ Offline DSL/DSL.DZ dictionary reader for Android and iOS, built with Kotlin Mult
 
 MVP / experimental.
 
-This repository currently contains the initial Kotlin Multiplatform skeleton. Archive import, parsing, indexing, and rendering behavior are intentionally not implemented yet.
+This repository currently contains the initial Kotlin Multiplatform skeleton plus shared dictionary parsing, archive import, indexing, search, and article rendering pieces.
 
 ## Planned features
 
@@ -22,6 +22,39 @@ This repository currently contains the initial Kotlin Multiplatform skeleton. Ar
 
 Dictionary files are not included.
 Users must provide dictionary files they are legally allowed to use.
+Do not commit real dictionary archives or extracted dictionary data.
+
+For local smoke testing, place a real `.tar.bz2` dictionary archive in the ignored `dict-example/` folder. The default expected path is:
+
+```text
+dict-example/enruen-content-1.1.tar.bz2
+```
+
+Run the JVM-only package import smoke test with:
+
+```bash
+./gradlew :shared:smokeImportLocalDictionary
+```
+
+To use another local archive path:
+
+```bash
+./gradlew :shared:smokeImportLocalDictionary -PdictionaryArchive=dict-example/your-dictionary.tar.bz2
+```
+
+If the archive is missing, the smoke test prints a skip message and exits successfully. If present, it imports the package into an in-memory JVM database and prints a summary like:
+
+```text
+Import summary:
+  imported dictionary count: 1
+  imported entry count: 12345
+  failed dictionary count: 0
+  ignored file count: 6
+Lookup probes:
+  a -> a
+```
+
+The smoke test prints headwords and counts only; it does not print full article contents.
 
 ## Not affiliated
 

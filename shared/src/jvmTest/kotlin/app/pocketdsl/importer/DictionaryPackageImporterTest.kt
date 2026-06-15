@@ -39,6 +39,26 @@ class DictionaryPackageImporterTest {
     }
 
     @Test
+    fun packageWithUtf16LittleEndianDslFileImportsSuccessfully() {
+        val repository = newRepository()
+        val importer = newPackageImporter(repository)
+        val archive = tarBz2(
+            file(
+                "content/sample.dsl",
+                utf16LittleEndianWithBom(dslString("Utf16 Dictionary", "alpha" to "альфа")),
+            ),
+        )
+
+        val result = importer.importTarBz2Package("package.tar.bz2", archive)
+
+        assertTrue(result.isSuccess)
+        assertEquals(1, result.totalImportedDictionaries)
+        assertEquals(1, result.totalImportedEntries)
+        assertEquals("Utf16 Dictionary", result.dictionaries.single().importResult?.dictionaryName)
+        assertEquals("alpha", repository.lookupExact("ALPHA").single().headword)
+    }
+
+    @Test
     fun packageWithOneDslDzFileImportsSuccessfully() {
         val repository = newRepository()
         val importer = newPackageImporter(repository)
@@ -230,6 +250,9 @@ class DictionaryPackageImporterTest {
     }
 
     private fun dslText(name: String, vararg entries: Pair<String, String>): ByteArray =
+        dslString(name, *entries).toByteArray(StandardCharsets.UTF_8)
+
+    private fun dslString(name: String, vararg entries: Pair<String, String>): String =
         buildString {
             appendLine("#NAME \"$name\"")
             appendLine("#INDEX_LANGUAGE \"English\"")
@@ -239,7 +262,10 @@ class DictionaryPackageImporterTest {
                 appendLine(headword)
                 appendLine(" [trn]$article[/trn]")
             }
-        }.trimEnd().toByteArray(StandardCharsets.UTF_8)
+        }.trimEnd()
+
+    private fun utf16LittleEndianWithBom(text: String): ByteArray =
+        byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + text.toByteArray(StandardCharsets.UTF_16LE)
 
     private fun gzip(bytes: ByteArray): ByteArray {
         val output = ByteArrayOutputStream()

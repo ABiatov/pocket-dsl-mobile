@@ -6,7 +6,7 @@ package app.pocketdsl.archive
  * Dictzip files are gzip-compatible streams with extra metadata for random access.
  * Stage 6 intentionally ignores that random-access metadata and performs full
  * sequential decompression into memory so the existing plain DSL importer can be
- * reused.
+ * reused. Extracted text may be UTF-8 or UTF-16 with a byte order mark.
  */
 expect class DslDzExtractor(limits: DslDzLimits = DslDzLimits()) {
     fun extractToText(bytes: ByteArray): String

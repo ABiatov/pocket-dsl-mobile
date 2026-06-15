@@ -24,6 +24,16 @@ class DslDzExtractorTest {
     }
 
     @Test
+    fun extractsUtf16LittleEndianDslTextWithBom() {
+        val text = artificialDslText()
+        val compressed = gzip(utf16LittleEndianWithBom(text))
+
+        val extracted = DslDzExtractor().extractToText(compressed)
+
+        assertEquals(text, extracted)
+    }
+
+    @Test
     fun extractedTextCanBeImportedByDictionaryImporter() {
         val text = artificialDslText()
         val extracted = DslDzExtractor().extractToText(gzip(text))
@@ -87,7 +97,7 @@ class DslDzExtractorTest {
             DslDzExtractor().extractToText(gzip(byteArrayOf(0xC3.toByte())))
         }
 
-        assertTrue(failure.message?.contains("not valid UTF-8") == true)
+        assertTrue(failure.message?.contains("not valid UTF-8 or UTF-16") == true)
     }
 
     private fun artificialDslText(): String =
@@ -104,6 +114,9 @@ class DslDzExtractorTest {
 
     private fun gzip(text: String): ByteArray =
         gzip(text.toByteArray(StandardCharsets.UTF_8))
+
+    private fun utf16LittleEndianWithBom(text: String): ByteArray =
+        byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + text.toByteArray(StandardCharsets.UTF_16LE)
 
     private fun gzip(bytes: ByteArray): ByteArray {
         val output = ByteArrayOutputStream()
