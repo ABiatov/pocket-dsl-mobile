@@ -1,0 +1,112 @@
+CREATE TABLE dictionaries (
+    id INTEGER NOT NULL PRIMARY KEY,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    indexLanguage TEXT,
+    contentsLanguage TEXT,
+    sourceFile TEXT NOT NULL,
+    createdAt INTEGER NOT NULL
+);
+
+CREATE TABLE entries (
+    id INTEGER NOT NULL PRIMARY KEY,
+    dictionaryId INTEGER NOT NULL,
+    headword TEXT NOT NULL,
+    normalizedHeadword TEXT NOT NULL,
+    articleRaw TEXT NOT NULL,
+    articleHtml TEXT NOT NULL,
+    FOREIGN KEY(dictionaryId) REFERENCES dictionaries(id)
+);
+
+CREATE INDEX entries_dictionary_idx
+ON entries(dictionaryId);
+
+CREATE INDEX entries_normalized_idx
+ON entries(normalizedHeadword);
+
+CREATE INDEX entries_headword_idx
+ON entries(headword);
+
+CREATE TABLE favorites (
+    entryId INTEGER NOT NULL PRIMARY KEY,
+    createdAt INTEGER NOT NULL,
+    FOREIGN KEY(entryId) REFERENCES entries(id)
+);
+
+CREATE TABLE history (
+    id INTEGER NOT NULL PRIMARY KEY,
+    query TEXT NOT NULL,
+    entryId INTEGER,
+    createdAt INTEGER NOT NULL,
+    FOREIGN KEY(entryId) REFERENCES entries(id)
+);
+
+selectDictionaries:
+SELECT *
+FROM dictionaries
+ORDER BY name;
+
+selectEntryById:
+SELECT *
+FROM entries
+WHERE id = ?;
+
+selectByExactWord:
+SELECT *
+FROM entries
+WHERE normalizedHeadword = ?
+ORDER BY headword;
+
+suggest:
+SELECT id, dictionaryId, headword
+FROM entries
+WHERE normalizedHeadword LIKE ?
+ORDER BY normalizedHeadword
+LIMIT ?;
+
+insertDictionary:
+INSERT INTO dictionaries(
+    code,
+    name,
+    direction,
+    indexLanguage,
+    contentsLanguage,
+    sourceFile,
+    createdAt
+)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+insertEntry:
+INSERT INTO entries(
+    dictionaryId,
+    headword,
+    normalizedHeadword,
+    articleRaw,
+    articleHtml
+)
+VALUES (?, ?, ?, ?, ?);
+
+insertFavorite:
+INSERT OR REPLACE INTO favorites(entryId, createdAt)
+VALUES (?, ?);
+
+deleteFavorite:
+DELETE FROM favorites
+WHERE entryId = ?;
+
+selectFavorites:
+SELECT entries.*
+FROM favorites
+JOIN entries ON entries.id = favorites.entryId
+ORDER BY favorites.createdAt DESC;
+
+insertHistory:
+INSERT INTO history(query, entryId, createdAt)
+VALUES (?, ?, ?);
+
+selectHistory:
+SELECT *
+FROM history
+ORDER BY createdAt DESC
+LIMIT ?;

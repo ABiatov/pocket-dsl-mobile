@@ -25,3 +25,43 @@ replay_pid*
 
 # Kotlin Gradle plugin data, see https://kotlinlang.org/docs/whatsnew20.html#new-directory-for-kotlin-data-in-gradle-projects
 .kotlin/
+
+# Local data, database volumes, and generated artifacts
+dict-example/
+
+
+# OS and editor metadata
+.DS_Store
+.idea/
+.vscode/
+technical_specifications.md
+plan.md
+
+# Gradle and build output
+.gradle/
+build/
+out/
+
+# Android local files
+local.properties
+*.apk
+*.aab
+
+# Kotlin Multiplatform generated files
+*.klib
+*.kotlin_module
+
+# iOS and Xcode generated files
+DerivedData/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcuserstate
+
+# Signing credentials and secrets
+*.keystore
+*.jks
+*.p12
+*.mobileprovision
+*.provisionprofile
+service-account*.json
