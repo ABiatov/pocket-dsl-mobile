@@ -110,3 +110,6 @@ SELECT *
 FROM history
 ORDER BY createdAt DESC
 LIMIT ?;
+
+lastInsertRowId:
+SELECT last_insert_rowid();

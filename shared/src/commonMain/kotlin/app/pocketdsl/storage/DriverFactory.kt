@@ -1,3 +1,7 @@
 package app.pocketdsl.storage
 
-interface DriverFactory
+import app.cash.sqldelight.db.SqlDriver
+
+interface DriverFactory {
+    fun createDriver(): SqlDriver
+}
