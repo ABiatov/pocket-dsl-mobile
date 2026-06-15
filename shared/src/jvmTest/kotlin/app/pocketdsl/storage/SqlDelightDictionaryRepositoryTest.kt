@@ -99,6 +99,27 @@ class SqlDelightDictionaryRepositoryTest {
     }
 
     @Test
+    fun suggestionEntryIdLoadsTheSuggestedEntry() {
+        val repository = newRepository()
+        val dictionaryId = repository.insertDictionaryMetadata(sampleMetadata())
+        repository.insertEntries(
+            dictionaryId = dictionaryId,
+            entries = listOf(
+                NewDictionaryEntry("Alpha", " [trn]one[/trn]", "<html>alpha</html>"),
+                NewDictionaryEntry("Alpine", " [trn]two[/trn]", "<html>alpine</html>"),
+            ),
+        )
+
+        val suggestion = repository.suggest("alp", limit = 10).first()
+        val entry = assertNotNull(repository.selectEntryById(suggestion.entryId))
+
+        assertEquals(suggestion.entryId, entry.id)
+        assertEquals(suggestion.dictionaryId, entry.dictionaryId)
+        assertEquals(suggestion.headword, entry.headword)
+        assertEquals("<html>alpha</html>", entry.articleHtml)
+    }
+
+    @Test
     fun prefixSuggestionsEscapeSqlLikeWildcards() {
         val repository = newRepository()
         val dictionaryId = repository.insertDictionaryMetadata(sampleMetadata())

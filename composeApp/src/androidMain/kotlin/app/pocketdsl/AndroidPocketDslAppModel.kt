@@ -7,11 +7,16 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import app.cash.sqldelight.db.SqlDriver
+import app.pocketdsl.archive.ArchiveExtractionException
+import app.pocketdsl.archive.ArchiveExtractionLimits
 import app.pocketdsl.archive.DslDzExtractor
+import app.pocketdsl.archive.DslDzExtractionException
+import app.pocketdsl.archive.DslDzLimits
 import app.pocketdsl.archive.DslTextDecoder
 import app.pocketdsl.archive.TarBz2Extractor
 import app.pocketdsl.db.PocketDslDatabase
@@ -42,9 +47,9 @@ class AndroidPocketDslAppModel(context: Context) {
         repository = repository,
         currentTimeMillis = { System.currentTimeMillis() },
     )
-    private val dslDzExtractor = DslDzExtractor()
+    private val dslDzExtractor = DslDzExtractor(ANDROID_DSL_DZ_LIMITS)
     private val packageImporter = DictionaryPackageImporter(
-        archiveExtractor = TarBz2Extractor(),
+        archiveExtractor = TarBz2Extractor(ANDROID_ARCHIVE_LIMITS),
         dslDzExtractor = dslDzExtractor,
         dictionaryImporter = dictionaryImporter,
     )
@@ -61,10 +66,13 @@ class AndroidPocketDslAppModel(context: Context) {
             val dictionaries = dictionaryMap()
             repository.suggest(prefix = query, limit = 20)
                 .map { suggestion ->
+                    val dictionary = dictionaries[suggestion.dictionaryId]
                     UiSuggestion(
                         entryId = suggestion.entryId,
+                        dictionaryId = suggestion.dictionaryId,
+                        dictionaryName = dictionaryName(dictionary),
                         headword = suggestion.headword,
-                        dictionaryLabel = dictionaryLabel(dictionaries[suggestion.dictionaryId]),
+                        dictionaryLabel = dictionaryLabel(dictionary),
                     )
                 }
         }
@@ -86,15 +94,40 @@ class AndroidPocketDslAppModel(context: Context) {
     }
 
     fun suggestionSelected(suggestion: UiSuggestion) {
+        val results = runCatching {
+            exactResults(suggestion.headword)
+        }.onFailure { cause ->
+            logArticleOpenFailure(
+                action = "suggestion_exact_lookup",
+                entryId = suggestion.entryId,
+                headword = suggestion.headword,
+                dictionaryId = suggestion.dictionaryId,
+                dictionaryName = suggestion.dictionaryName,
+                cause = cause,
+            )
+        }.getOrDefault(emptyList())
+
         state = state.copy(
             query = suggestion.headword,
-            searchResults = exactResults(suggestion.headword),
+            searchResults = results,
         )
-        openEntry(entryId = suggestion.entryId, query = suggestion.headword)
+        openEntry(
+            entryId = suggestion.entryId,
+            query = suggestion.headword,
+            requestedHeadword = suggestion.headword,
+            requestedDictionaryId = suggestion.dictionaryId,
+            requestedDictionaryName = suggestion.dictionaryName,
+        )
     }
 
     fun resultSelected(result: UiSearchResult) {
-        openEntry(entryId = result.entryId, query = state.query.ifBlank { result.headword })
+        openEntry(
+            entryId = result.entryId,
+            query = state.query.ifBlank { result.headword },
+            requestedHeadword = result.headword,
+            requestedDictionaryId = result.dictionaryId,
+            requestedDictionaryName = result.dictionaryName,
+        )
     }
 
     fun toggleFavorite() {
@@ -139,6 +172,7 @@ class AndroidPocketDslAppModel(context: Context) {
                 uri = uri,
                 fileName = fileName,
                 expectedSizeBytes = fileInfo.sizeBytes,
+                selectedLimitBytes = importKind.selectedInputLimitBytes,
             )
 
             val message = when (importKind) {
@@ -174,7 +208,10 @@ class AndroidPocketDslAppModel(context: Context) {
 
     private fun importDsl(fileName: String, file: File): String {
         updateState { it.copy(importMessage = "Decoding $fileName...") }
-        val bytes = file.readImportBytes(fileName)
+        val bytes = file.readImportBytes(
+            fileName = fileName,
+            selectedLimitBytes = ImportKind.DSL.selectedInputLimitBytes,
+        )
         val text = DslTextDecoder.decode(bytes)
         val result = dictionaryImporter.importDslText(
             sourceFileName = fileName,
@@ -186,8 +223,20 @@ class AndroidPocketDslAppModel(context: Context) {
 
     private fun importDslDz(fileName: String, file: File): String {
         updateState { it.copy(importMessage = "Extracting $fileName...") }
-        val bytes = file.readImportBytes(fileName)
-        val text = dslDzExtractor.extractToText(bytes)
+        val bytes = file.readImportBytes(
+            fileName = fileName,
+            selectedLimitBytes = ImportKind.DSL_DZ.selectedInputLimitBytes,
+        )
+        val text = try {
+            dslDzExtractor.extractToText(bytes)
+        } catch (cause: OutOfMemoryError) {
+            throw ImportFileTooLargeException(
+                "The decompressed DSL text could not be loaded in memory. Android MVP decompressed DSL text " +
+                    "limit is ${MAX_ANDROID_DECOMPRESSED_DSL_TEXT_BYTES.toMiBString()}; selected file was " +
+                    "${file.length().toMiBString()}.",
+                cause,
+            )
+        }
         val result = dictionaryImporter.importDslText(
             sourceFileName = fileName,
             text = text,
@@ -197,7 +246,10 @@ class AndroidPocketDslAppModel(context: Context) {
     }
 
     private fun importTarBz2(fileName: String, file: File): String {
-        val bytes = file.readImportBytes(fileName)
+        val bytes = file.readImportBytes(
+            fileName = fileName,
+            selectedLimitBytes = ImportKind.TAR_BZ2.selectedInputLimitBytes,
+        )
         val result = packageImporter.importTarBz2Package(
             sourceFileName = fileName,
             bytes = bytes,
@@ -254,10 +306,13 @@ class AndroidPocketDslAppModel(context: Context) {
     private fun exactResults(query: String): List<UiSearchResult> {
         val dictionaries = dictionaryMap()
         return repository.lookupExact(query).map { entry ->
+            val dictionary = dictionaries[entry.dictionaryId]
             UiSearchResult(
                 entryId = entry.id,
+                dictionaryId = entry.dictionaryId,
+                dictionaryName = dictionaryName(dictionary),
                 headword = entry.headword,
-                dictionaryLabel = dictionaryLabel(dictionaries[entry.dictionaryId]),
+                dictionaryLabel = dictionaryLabel(dictionary),
             )
         }
     }
@@ -265,27 +320,96 @@ class AndroidPocketDslAppModel(context: Context) {
     private fun suggestionsFor(query: String): List<UiSuggestion> {
         val dictionaries = dictionaryMap()
         return repository.suggest(prefix = query, limit = 20).map { suggestion ->
+            val dictionary = dictionaries[suggestion.dictionaryId]
             UiSuggestion(
                 entryId = suggestion.entryId,
+                dictionaryId = suggestion.dictionaryId,
+                dictionaryName = dictionaryName(dictionary),
                 headword = suggestion.headword,
-                dictionaryLabel = dictionaryLabel(dictionaries[suggestion.dictionaryId]),
+                dictionaryLabel = dictionaryLabel(dictionary),
             )
         }
     }
 
-    private fun openEntry(entryId: Long, query: String) {
-        val entry = repository.selectEntryById(entryId) ?: return
-        repository.addHistoryItem(
-            query = query,
-            entryId = entry.id,
-            createdAt = System.currentTimeMillis(),
-        )
-        val favoriteIds = repository.listFavorites().map { it.id }.toSet()
-        state = state.copy(selectedEntry = entry.toUiArticleEntry(favoriteIds))
+    private fun openEntry(
+        entryId: Long,
+        query: String,
+        requestedHeadword: String,
+        requestedDictionaryId: Long,
+        requestedDictionaryName: String,
+    ) {
+        try {
+            val entry = repository.selectEntryById(entryId)
+            if (entry == null) {
+                Log.w(
+                    LOG_TAG,
+                    "Article entry missing: entryId=$entryId headword=$requestedHeadword " +
+                        "dictionaryId=$requestedDictionaryId dictionaryName=$requestedDictionaryName",
+                )
+                state = state.copy(
+                    importMessage = "Article could not be opened because the entry is no longer available.",
+                )
+                return
+            }
+
+            val dictionary = dictionaryMap()[entry.dictionaryId]
+            val dictionaryName = dictionaryName(dictionary)
+            Log.i(
+                LOG_TAG,
+                "Opening article: entryId=${entry.id} headword=${entry.headword} " +
+                    "dictionaryId=${entry.dictionaryId} dictionaryName=$dictionaryName",
+            )
+
+            runCatching {
+                repository.addHistoryItem(
+                    query = query,
+                    entryId = entry.id,
+                    createdAt = System.currentTimeMillis(),
+                )
+            }.onFailure { cause ->
+                logArticleOpenFailure(
+                    action = "add_history",
+                    entryId = entry.id,
+                    headword = entry.headword,
+                    dictionaryId = entry.dictionaryId,
+                    dictionaryName = dictionaryName,
+                    cause = cause,
+                )
+            }
+
+            val favoriteIds = runCatching {
+                repository.listFavorites().map { it.id }.toSet()
+            }.onFailure { cause ->
+                logArticleOpenFailure(
+                    action = "list_favorites",
+                    entryId = entry.id,
+                    headword = entry.headword,
+                    dictionaryId = entry.dictionaryId,
+                    dictionaryName = dictionaryName,
+                    cause = cause,
+                )
+            }.getOrDefault(emptySet())
+
+            state = state.copy(selectedEntry = entry.toUiArticleEntry(favoriteIds, dictionary))
+        } catch (cause: Throwable) {
+            logArticleOpenFailure(
+                action = "open_article",
+                entryId = entryId,
+                headword = requestedHeadword,
+                dictionaryId = requestedDictionaryId,
+                dictionaryName = requestedDictionaryName,
+                cause = cause,
+            )
+            state = state.copy(
+                importMessage = "Could not open article for \"$requestedHeadword\". Try searching again.",
+            )
+        }
     }
 
-    private fun DictionaryEntry.toUiArticleEntry(favoriteIds: Set<Long>): UiArticleEntry {
-        val dictionary = dictionaryMap()[dictionaryId]
+    private fun DictionaryEntry.toUiArticleEntry(
+        favoriteIds: Set<Long>,
+        dictionary: DictionaryMetadata?,
+    ): UiArticleEntry {
         return UiArticleEntry(
             entryId = id,
             headword = headword,
@@ -297,6 +421,9 @@ class AndroidPocketDslAppModel(context: Context) {
 
     private fun dictionaryMap(): Map<Long, DictionaryMetadata> =
         repository.selectDictionaries().associateBy { it.id }
+
+    private fun dictionaryName(dictionary: DictionaryMetadata?): String =
+        dictionary?.name ?: "Unknown dictionary"
 
     private fun dictionaryLabel(dictionary: DictionaryMetadata?): String {
         if (dictionary == null) return "Unknown dictionary"
@@ -310,6 +437,8 @@ class AndroidPocketDslAppModel(context: Context) {
     private fun friendlyError(cause: Throwable): String =
         when (cause) {
             is ImportFileTooLargeException -> "Import failed: ${cause.message}"
+            is DslDzExtractionException -> "Import failed: ${formatByteLimits(cause.message)}"
+            is ArchiveExtractionException -> "Import failed: ${formatByteLimits(cause.message)}"
             is SecurityException -> {
                 "Import failed: Android denied access to the selected file. Re-open it from the file picker and try again."
             }
@@ -320,7 +449,9 @@ class AndroidPocketDslAppModel(context: Context) {
                 "Import failed: Could not read the selected file. Re-open it from the file picker and try again."
             }
             is OutOfMemoryError -> {
-                "Import failed: The selected file is too large for this device. Try a smaller dictionary package."
+                "Import failed: The selected file is too large for this device. Android MVP limits are " +
+                    "${MAX_ANDROID_SELECTED_DSL_DZ_BYTES.toMiBString()} selected compressed input and " +
+                    "${MAX_ANDROID_DECOMPRESSED_DSL_TEXT_BYTES.toMiBString()} decompressed DSL text."
             }
             else -> cause.message?.takeIf { it.isNotBlank() }?.let { "Import failed: $it" }
                 ?: "Import failed. The selected file could not be imported."
@@ -331,10 +462,11 @@ class AndroidPocketDslAppModel(context: Context) {
         uri: Uri,
         fileName: String,
         expectedSizeBytes: Long?,
+        selectedLimitBytes: Long,
     ): File {
         expectedSizeBytes?.let { size ->
-            if (size > MAX_ANDROID_IMPORT_BYTES) {
-                throw ImportFileTooLargeException(fileTooLargeMessage(size))
+            if (size > selectedLimitBytes) {
+                throw ImportFileTooLargeException(fileTooLargeMessage(size, selectedLimitBytes))
             }
         }
 
@@ -353,8 +485,8 @@ class AndroidPocketDslAppModel(context: Context) {
                         if (read == -1) break
 
                         copiedBytes += read.toLong()
-                        if (copiedBytes > MAX_ANDROID_IMPORT_BYTES) {
-                            throw ImportFileTooLargeException(fileTooLargeMessage(copiedBytes))
+                        if (copiedBytes > selectedLimitBytes) {
+                            throw ImportFileTooLargeException(fileTooLargeMessage(copiedBytes, selectedLimitBytes))
                         }
 
                         destination.write(buffer, 0, read)
@@ -381,13 +513,16 @@ class AndroidPocketDslAppModel(context: Context) {
         }
     }
 
-    private fun File.readImportBytes(fileName: String): ByteArray {
+    private fun File.readImportBytes(
+        fileName: String,
+        selectedLimitBytes: Long,
+    ): ByteArray {
         val size = length()
-        if (size > MAX_ANDROID_IMPORT_BYTES) {
-            throw ImportFileTooLargeException(fileTooLargeMessage(size))
+        if (size > selectedLimitBytes) {
+            throw ImportFileTooLargeException(fileTooLargeMessage(size, selectedLimitBytes))
         }
         if (size > Int.MAX_VALUE) {
-            throw ImportFileTooLargeException(fileTooLargeMessage(size))
+            throw ImportFileTooLargeException(fileTooLargeMessage(size, selectedLimitBytes))
         }
 
         updateState {
@@ -398,7 +533,8 @@ class AndroidPocketDslAppModel(context: Context) {
             readBytes()
         } catch (cause: OutOfMemoryError) {
             throw ImportFileTooLargeException(
-                "The selected file is too large for this device. Try a smaller dictionary package.",
+                "The selected file is ${size.toMiBString()}, which could not be loaded in memory. " +
+                    "Android MVP selected input limit is ${selectedLimitBytes.toMiBString()}.",
                 cause,
             )
         }
@@ -471,9 +607,40 @@ class AndroidPocketDslAppModel(context: Context) {
         return "Reading $name: $copied of $total ($percent%)..."
     }
 
-    private fun fileTooLargeMessage(sizeBytes: Long): String =
+    private fun fileTooLargeMessage(sizeBytes: Long, limitBytes: Long): String =
         "The selected file is ${sizeBytes.toMiBString()}, which exceeds the Android MVP import limit of " +
-            "${MAX_ANDROID_IMPORT_BYTES.toMiBString()}."
+            "${limitBytes.toMiBString()}."
+
+    private fun formatByteLimits(message: String?): String {
+        val source = message?.takeIf { it.isNotBlank() }
+            ?: return "The selected file could not be imported."
+
+        return BYTE_LIMIT_PATTERN.replace(source) { match ->
+            val actualBytes = match.groupValues[1].toLongOrNull()
+            val limitBytes = match.groupValues[2].toLongOrNull()
+            if (actualBytes == null || limitBytes == null) {
+                match.value
+            } else {
+                "${actualBytes.toMiBString()} > ${limitBytes.toMiBString()}"
+            }
+        }
+    }
+
+    private fun logArticleOpenFailure(
+        action: String,
+        entryId: Long,
+        headword: String,
+        dictionaryId: Long,
+        dictionaryName: String,
+        cause: Throwable,
+    ) {
+        Log.e(
+            LOG_TAG,
+            "Article open failed: action=$action entryId=$entryId headword=$headword " +
+                "dictionaryId=$dictionaryId dictionaryName=$dictionaryName " +
+                "exception=${cause::class.java.simpleName}: ${cause.message}",
+        )
+    }
 
     private fun Long.toMiBString(): String {
         val mib = this / BYTES_PER_MIB
@@ -500,10 +667,18 @@ class AndroidPocketDslAppModel(context: Context) {
     )
 
     private enum class ImportKind {
-        DSL,
-        DSL_DZ,
-        TAR_BZ2,
+        DSL {
+            override val selectedInputLimitBytes: Long = MAX_ANDROID_SELECTED_DSL_BYTES
+        },
+        DSL_DZ {
+            override val selectedInputLimitBytes: Long = MAX_ANDROID_SELECTED_DSL_DZ_BYTES
+        },
+        TAR_BZ2 {
+            override val selectedInputLimitBytes: Long = MAX_ANDROID_SELECTED_TAR_BZ2_BYTES
+        },
         ;
+
+        abstract val selectedInputLimitBytes: Long
 
         companion object {
             fun fromFileName(fileName: String): ImportKind? =
@@ -522,10 +697,27 @@ class AndroidPocketDslAppModel(context: Context) {
     ) : Exception(message, cause)
 
     private companion object {
+        const val LOG_TAG = "PocketDsl"
         const val COPY_BUFFER_SIZE_BYTES = 1024 * 1024
         const val READ_PROGRESS_INTERVAL_BYTES = 8L * 1024L * 1024L
-        const val MAX_ANDROID_IMPORT_BYTES = 512L * 1024L * 1024L
         const val BYTES_PER_MIB = 1024L * 1024L
         const val MAX_IMPORT_MESSAGE_FILE_NAME_LENGTH = 72
+        const val MAX_ANDROID_SELECTED_DSL_BYTES = 768L * BYTES_PER_MIB
+        const val MAX_ANDROID_SELECTED_DSL_DZ_BYTES = 1024L * BYTES_PER_MIB
+        const val MAX_ANDROID_SELECTED_TAR_BZ2_BYTES = 1024L * BYTES_PER_MIB
+        const val MAX_ANDROID_DECOMPRESSED_DSL_TEXT_BYTES = 1024L * BYTES_PER_MIB
+        const val MAX_ANDROID_ARCHIVE_TOTAL_EXTRACTED_BYTES = 2L * 1024L * BYTES_PER_MIB
+        const val MAX_ANDROID_ARCHIVE_ENTRY_BYTES = 1024L * BYTES_PER_MIB
+
+        val ANDROID_DSL_DZ_LIMITS = DslDzLimits(
+            maxCompressedInputBytes = MAX_ANDROID_SELECTED_DSL_DZ_BYTES,
+            maxDecompressedOutputBytes = MAX_ANDROID_DECOMPRESSED_DSL_TEXT_BYTES,
+        )
+        val ANDROID_ARCHIVE_LIMITS = ArchiveExtractionLimits(
+            maxCompressedSizeBytes = MAX_ANDROID_SELECTED_TAR_BZ2_BYTES,
+            maxTotalExtractedSizeBytes = MAX_ANDROID_ARCHIVE_TOTAL_EXTRACTED_BYTES,
+            maxFileSizeBytes = MAX_ANDROID_ARCHIVE_ENTRY_BYTES,
+        )
+        val BYTE_LIMIT_PATTERN = Regex("(\\d+) bytes > (\\d+) bytes")
     }
 }

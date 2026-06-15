@@ -13,10 +13,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -59,27 +60,27 @@ fun App(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Row(
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Column {
-                        Text(
-                            text = "PocketDSL",
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            text = "Dictionary files are not included. Import files you are allowed to use.",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
+                    Text(
+                        text = "PocketDSL",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "Dictionary files are not included. Import files you are allowed to use.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                     Button(
                         onClick = onImportClick,
                         enabled = !state.isImporting,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .widthIn(min = 180.dp),
                     ) {
-                        Text("Import")
+                        Text("Import dictionary")
                     }
                 }
 
@@ -187,7 +188,10 @@ private fun SearchColumn(
                     fontWeight = FontWeight.SemiBold,
                 )
             }
-            items(state.searchResults, key = { it.entryId }) { result ->
+            itemsIndexed(
+                state.searchResults,
+                key = ::searchResultLazyKey,
+            ) { _, result ->
                 SearchRow(
                     headword = result.headword,
                     subtitle = result.dictionaryLabel,
@@ -219,7 +223,10 @@ private fun SearchColumn(
                 )
             }
         } else {
-            items(state.suggestions, key = { it.entryId }) { suggestion ->
+            itemsIndexed(
+                state.suggestions,
+                key = ::suggestionLazyKey,
+            ) { _, suggestion ->
                 SearchRow(
                     headword = suggestion.headword,
                     subtitle = suggestion.dictionaryLabel,
@@ -229,6 +236,13 @@ private fun SearchColumn(
         }
     }
 }
+
+internal fun searchResultLazyKey(index: Int, result: UiSearchResult): String =
+    "result|${result.entryId}|${result.dictionaryId}|${result.headword}|${result.dictionaryLabel}|$index"
+
+internal fun suggestionLazyKey(index: Int, suggestion: UiSuggestion): String =
+    "suggestion|${suggestion.entryId}|${suggestion.dictionaryId}|${suggestion.headword}|" +
+        "${suggestion.dictionaryLabel}|$index"
 
 @Composable
 private fun SearchRow(
@@ -313,12 +327,16 @@ data class PocketDslUiState(
 
 data class UiSuggestion(
     val entryId: Long,
+    val dictionaryId: Long,
+    val dictionaryName: String,
     val headword: String,
     val dictionaryLabel: String,
 )
 
 data class UiSearchResult(
     val entryId: Long,
+    val dictionaryId: Long,
+    val dictionaryName: String,
     val headword: String,
     val dictionaryLabel: String,
 )
