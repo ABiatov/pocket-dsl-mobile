@@ -29,6 +29,16 @@ replay_pid*
 # Local data, database volumes, and generated artifacts
 dict-example/
 
+# Real dictionary imports and extracted dictionary data
+imported-dictionaries/
+dictionaries/
+dictionary-imports/
+*.tar.bz2
+*.tbz2
+*.bz2
+*.dsl.dz
+*.lsa
+
 
 # OS and editor metadata
 .DS_Store
@@ -40,6 +50,7 @@ plan.md
 # Gradle and build output
 .gradle/
 build/
+**/build/
 out/
 
 # Android local files
@@ -65,3 +76,6 @@ DerivedData/
 *.mobileprovision
 *.provisionprofile
 service-account*.json
+
+# Required Gradle Wrapper bootstrap jar
+!gradle/wrapper/gradle-wrapper.jar
