@@ -9,4 +9,18 @@ data class ImportResult(
     val sourceFileName: String,
     val indexLanguage: String?,
     val contentsLanguage: String?,
+    val warnings: List<ImportWarning> = emptyList(),
 )
+
+data class ImportWarning(
+    val reason: ImportWarningReason,
+    val count: Long,
+    val limit: Int? = null,
+)
+
+enum class ImportWarningReason {
+    HEADWORD_TOO_LONG,
+    ARTICLE_RAW_TOO_LARGE,
+    ARTICLE_HTML_TOO_LARGE,
+    MAX_ENTRIES_REACHED,
+}

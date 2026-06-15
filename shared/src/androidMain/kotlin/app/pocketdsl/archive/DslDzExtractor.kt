@@ -8,7 +8,7 @@ import java.util.zip.GZIPInputStream
 actual class DslDzExtractor actual constructor(
     private val limits: DslDzLimits,
 ) {
-    actual fun extractToText(bytes: ByteArray): String {
+    actual fun extract(bytes: ByteArray): DslDzExtractionResult {
         ensureCompressedSize(bytes)
 
         val decompressed = try {
@@ -17,8 +17,17 @@ actual class DslDzExtractor actual constructor(
             throw DslDzExtractionException("Invalid DSL.DZ gzip data", cause)
         }
 
-        return decodeDslText(decompressed)
+        val decoded = decodeDslText(decompressed)
+        return DslDzExtractionResult(
+            text = decoded.text,
+            compressedByteCount = bytes.size.toLong(),
+            decompressedByteCount = decompressed.size.toLong(),
+            encoding = decoded.encoding,
+        )
     }
+
+    actual fun extractToText(bytes: ByteArray): String =
+        extract(bytes).text
 
     private fun ensureCompressedSize(bytes: ByteArray) {
         if (bytes.size.toLong() > limits.maxCompressedInputBytes) {
@@ -56,9 +65,9 @@ actual class DslDzExtractor actual constructor(
         }
     }
 
-    private fun decodeDslText(bytes: ByteArray): String =
+    private fun decodeDslText(bytes: ByteArray): DslDecodedText =
         try {
-            DslTextDecoder.decode(bytes)
+            DslTextDecoder.decodeWithInfo(bytes)
         } catch (cause: DslTextDecodingException) {
             throw DslDzExtractionException("Decompressed DSL text is not valid UTF-8 or UTF-16 with BOM", cause)
         }

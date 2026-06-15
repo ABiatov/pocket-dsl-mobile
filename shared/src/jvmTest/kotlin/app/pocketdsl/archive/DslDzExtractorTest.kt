@@ -4,6 +4,7 @@ import app.pocketdsl.db.PocketDslDatabase
 import app.pocketdsl.importer.DictionaryImporter
 import app.pocketdsl.storage.JvmTestDriverFactory
 import app.pocketdsl.storage.SqlDelightDictionaryRepository
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import java.util.zip.GZIPOutputStream
@@ -31,6 +32,62 @@ class DslDzExtractorTest {
         val extracted = DslDzExtractor().extractToText(compressed)
 
         assertEquals(text, extracted)
+    }
+
+    @Test
+    fun extractionResultReportsSizesAndEncoding() {
+        val text = artificialDslText()
+        val uncompressed = utf16LittleEndianWithBom(text)
+        val compressed = gzip(uncompressed)
+
+        val result = DslDzExtractor().extract(compressed)
+
+        assertEquals(text, result.text)
+        assertEquals(compressed.size.toLong(), result.compressedByteCount)
+        assertEquals(uncompressed.size.toLong(), result.decompressedByteCount)
+        assertEquals(DslTextEncoding.UTF_16_LE, result.encoding)
+    }
+
+    @Test
+    fun streamsUtf16LittleEndianDslDzWithoutFullExtraction() {
+        val text = artificialDslText()
+        val compressed = gzip(utf16LittleEndianWithBom(text))
+
+        DslDzTextStream().open(
+            input = ByteArrayInputStream(compressed),
+            compressedByteCount = compressed.size.toLong(),
+        ).use { stream ->
+            assertEquals(DslTextEncoding.UTF_16_LE, stream.encoding)
+            assertEquals(text.lines(), stream.lines.toList())
+            assertEquals(utf16LittleEndianWithBom(text).size.toLong(), stream.counters.decompressedByteCount)
+            assertTrue(stream.counters.decompressedCharCount > 0)
+        }
+    }
+
+    @Test
+    fun streamedDslDzLinesCanBeImportedByDictionaryImporter() {
+        val text = artificialDslText()
+        val compressed = gzip(text)
+        val repository = SqlDelightDictionaryRepository(
+            PocketDslDatabase(JvmTestDriverFactory().createDriver()),
+        )
+        val importer = DictionaryImporter(repository, currentTimeMillis = { 42 })
+
+        val result = DslDzTextStream().open(
+            input = ByteArrayInputStream(compressed),
+            compressedByteCount = compressed.size.toLong(),
+        ).use { stream ->
+            importer.importDslLines(
+                sourceFileName = "artificial.dsl.dz",
+                lines = stream.lines,
+            )
+        }
+
+        assertEquals("Artificial Dz", result.dictionaryName)
+        assertEquals("en-ru", result.direction)
+        assertEquals(2, result.entryCount)
+        assertEquals("alpha", repository.lookupExact("ALPHA").single().headword)
+        assertEquals("beta", repository.lookupExact("BETA").single().headword)
     }
 
     @Test

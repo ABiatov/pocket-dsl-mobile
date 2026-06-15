@@ -9,8 +9,17 @@ package app.pocketdsl.archive
  * reused. Extracted text may be UTF-8 or UTF-16 with a byte order mark.
  */
 expect class DslDzExtractor(limits: DslDzLimits = DslDzLimits()) {
+    fun extract(bytes: ByteArray): DslDzExtractionResult
+
     fun extractToText(bytes: ByteArray): String
 }
+
+data class DslDzExtractionResult(
+    val text: String,
+    val compressedByteCount: Long,
+    val decompressedByteCount: Long,
+    val encoding: DslTextEncoding,
+)
 
 data class DslDzLimits(
     val maxCompressedInputBytes: Long = 512L * 1024L * 1024L,

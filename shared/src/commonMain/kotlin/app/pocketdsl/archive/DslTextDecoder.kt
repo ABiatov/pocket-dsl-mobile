@@ -2,11 +2,29 @@ package app.pocketdsl.archive
 
 object DslTextDecoder {
     fun decode(bytes: ByteArray): String =
+        decodeWithInfo(bytes).text
+
+    fun decodeWithInfo(bytes: ByteArray): DslDecodedText =
         when {
-            bytes.startsWith(UTF_16_LE_BOM) -> decodeUtf16(bytes, offset = UTF_16_LE_BOM.size, littleEndian = true)
-            bytes.startsWith(UTF_16_BE_BOM) -> decodeUtf16(bytes, offset = UTF_16_BE_BOM.size, littleEndian = false)
-            bytes.startsWith(UTF_8_BOM) -> decodeUtf8(bytes, offset = UTF_8_BOM.size)
-            else -> decodeUtf8(bytes, offset = 0)
+            bytes.startsWith(UTF_16_LE_BOM) -> DslDecodedText(
+                text = decodeUtf16(bytes, offset = UTF_16_LE_BOM.size, littleEndian = true),
+                encoding = DslTextEncoding.UTF_16_LE,
+            )
+
+            bytes.startsWith(UTF_16_BE_BOM) -> DslDecodedText(
+                text = decodeUtf16(bytes, offset = UTF_16_BE_BOM.size, littleEndian = false),
+                encoding = DslTextEncoding.UTF_16_BE,
+            )
+
+            bytes.startsWith(UTF_8_BOM) -> DslDecodedText(
+                text = decodeUtf8(bytes, offset = UTF_8_BOM.size),
+                encoding = DslTextEncoding.UTF_8_WITH_BOM,
+            )
+
+            else -> DslDecodedText(
+                text = decodeUtf8(bytes, offset = 0),
+                encoding = DslTextEncoding.UTF_8,
+            )
         }
 
     private fun decodeUtf8(bytes: ByteArray, offset: Int): String =
@@ -46,6 +64,18 @@ object DslTextDecoder {
     private val UTF_8_BOM = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())
     private val UTF_16_LE_BOM = byteArrayOf(0xFF.toByte(), 0xFE.toByte())
     private val UTF_16_BE_BOM = byteArrayOf(0xFE.toByte(), 0xFF.toByte())
+}
+
+data class DslDecodedText(
+    val text: String,
+    val encoding: DslTextEncoding,
+)
+
+enum class DslTextEncoding(val displayName: String) {
+    UTF_8("UTF-8"),
+    UTF_8_WITH_BOM("UTF-8 BOM"),
+    UTF_16_LE("UTF-16LE BOM"),
+    UTF_16_BE("UTF-16BE BOM"),
 }
 
 class DslTextDecodingException(

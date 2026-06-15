@@ -142,6 +142,59 @@ class DslParserTest {
     }
 
     @Test
+    fun streamingParserEmitsEntriesWithoutCollectingResultList() {
+        val entries = mutableListOf<DslEntry>()
+        val metadata = parser.parseStreaming(
+            lines = sequenceOf(
+                "#NAME \"Streaming\"",
+                "#INDEX_LANGUAGE \"English\"",
+                "#CONTENTS_LANGUAGE \"Russian\"",
+                "",
+                "alpha",
+                " [trn]first[/trn]",
+                "beta",
+                " [trn]second[/trn]",
+            ),
+            onEntry = entries::add,
+        )
+
+        assertEquals("Streaming", metadata.name)
+        assertEquals(
+            listOf(
+                DslEntry("alpha", " [trn]first[/trn]"),
+                DslEntry("beta", " [trn]second[/trn]"),
+            ),
+            entries,
+        )
+    }
+
+    @Test
+    fun streamingParserStopsAccumulatingOversizedRawArticle() {
+        val entries = mutableListOf<DslEntry>()
+
+        parser.parseStreaming(
+            lines = sequenceOf(
+                "alpha",
+                " 123456789",
+                "beta",
+                " ok",
+            ),
+            maxArticleRawChars = 5,
+            onEntry = entries::add,
+        )
+
+        assertEquals(
+            DslEntry(
+                headword = "alpha",
+                articleRaw = "",
+                articleRawExceededLimit = true,
+            ),
+            entries[0],
+        )
+        assertEquals(DslEntry("beta", " ok"), entries[1])
+    }
+
+    @Test
     fun flushesFinalEntryAtEofWithoutTrailingNewline() {
         val (_, entries) = parser.parse("omega\n [trn]last[/trn]")
 

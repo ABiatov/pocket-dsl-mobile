@@ -17,11 +17,16 @@ import app.pocketdsl.archive.ArchiveExtractionLimits
 import app.pocketdsl.archive.DslDzExtractor
 import app.pocketdsl.archive.DslDzExtractionException
 import app.pocketdsl.archive.DslDzLimits
+import app.pocketdsl.archive.DslDzTextStream
 import app.pocketdsl.archive.DslTextDecoder
+import app.pocketdsl.archive.DslTextDecodingException
 import app.pocketdsl.archive.TarBz2Extractor
 import app.pocketdsl.db.PocketDslDatabase
+import app.pocketdsl.importer.DictionaryImportException
+import app.pocketdsl.importer.DictionaryImportStage
 import app.pocketdsl.importer.DictionaryImporter
 import app.pocketdsl.importer.DictionaryPackageImporter
+import app.pocketdsl.importer.ImportResult
 import app.pocketdsl.importer.ImportProgress
 import app.pocketdsl.importer.PackageImportProgress
 import app.pocketdsl.platform.AndroidDriverFactory
@@ -48,6 +53,7 @@ class AndroidPocketDslAppModel(context: Context) {
         currentTimeMillis = { System.currentTimeMillis() },
     )
     private val dslDzExtractor = DslDzExtractor(ANDROID_DSL_DZ_LIMITS)
+    private val dslDzTextStream = DslDzTextStream(ANDROID_DSL_DZ_LIMITS)
     private val packageImporter = DictionaryPackageImporter(
         archiveExtractor = TarBz2Extractor(ANDROID_ARCHIVE_LIMITS),
         dslDzExtractor = dslDzExtractor,
@@ -152,11 +158,15 @@ class AndroidPocketDslAppModel(context: Context) {
         }
 
         var cachedFile: File? = null
+        val diagnostics = ImportDiagnostics()
 
         try {
             val fileInfo = contentResolver.fileInfo(uri)
             val fileName = fileInfo.displayName ?: uri.inferredFileName()
             val importKind = ImportKind.fromFileName(fileName)
+            diagnostics.fileName = fileName
+            diagnostics.importKind = importKind
+            diagnostics.reportedSelectedBytes = fileInfo.sizeBytes
             if (importKind == null) {
                 updateState {
                     it.copy(
@@ -174,12 +184,15 @@ class AndroidPocketDslAppModel(context: Context) {
                 expectedSizeBytes = fileInfo.sizeBytes,
                 selectedLimitBytes = importKind.selectedInputLimitBytes,
             )
+            diagnostics.selectedFileBytes = cachedFile.length()
+            logImportStarted(diagnostics)
 
             val message = when (importKind) {
-                ImportKind.DSL_DZ -> importDslDz(fileName, cachedFile)
-                ImportKind.DSL -> importDsl(fileName, cachedFile)
-                ImportKind.TAR_BZ2 -> importTarBz2(fileName, cachedFile)
+                ImportKind.DSL_DZ -> importDslDz(fileName, cachedFile, diagnostics)
+                ImportKind.DSL -> importDsl(fileName, cachedFile, diagnostics)
+                ImportKind.TAR_BZ2 -> importTarBz2(fileName, cachedFile, diagnostics)
             }
+            logImportSucceeded(diagnostics)
 
             val dictionaryCount = repository.selectDictionaries().size
             updateState {
@@ -191,10 +204,11 @@ class AndroidPocketDslAppModel(context: Context) {
                 )
             }
         } catch (cause: Throwable) {
+            logImportFailure(cause, diagnostics)
             updateState {
                 it.copy(
                     isImporting = false,
-                    importMessage = friendlyError(cause),
+                    importMessage = friendlyError(cause, diagnostics),
                 )
             }
         } finally {
@@ -206,50 +220,67 @@ class AndroidPocketDslAppModel(context: Context) {
         driver.close()
     }
 
-    private fun importDsl(fileName: String, file: File): String {
+    private fun importDsl(fileName: String, file: File, diagnostics: ImportDiagnostics): String {
         updateState { it.copy(importMessage = "Decoding $fileName...") }
         val bytes = file.readImportBytes(
             fileName = fileName,
             selectedLimitBytes = ImportKind.DSL.selectedInputLimitBytes,
         )
-        val text = DslTextDecoder.decode(bytes)
+        diagnostics.selectedFileBytes = bytes.size.toLong()
+        diagnostics.decompressedDslBytes = bytes.size.toLong()
+        val decoded = DslTextDecoder.decodeWithInfo(bytes)
+        diagnostics.decompressedDslChars = decoded.text.length.toLong()
+        diagnostics.detectedEncoding = decoded.encoding.displayName
         val result = dictionaryImporter.importDslText(
             sourceFileName = fileName,
-            text = text,
-            progress = ::onImportProgress,
+            text = decoded.text,
+            progress = progressLogger(diagnostics),
         )
-        return "Imported ${result.dictionaryName}: ${result.entryCount} entries, ${result.skippedCount} skipped."
+        diagnostics.dictionaryName = result.dictionaryName
+        diagnostics.importedEntryCount = result.entryCount
+        return result.importSuccessMessage()
     }
 
-    private fun importDslDz(fileName: String, file: File): String {
+    private fun importDslDz(fileName: String, file: File, diagnostics: ImportDiagnostics): String {
         updateState { it.copy(importMessage = "Extracting $fileName...") }
-        val bytes = file.readImportBytes(
-            fileName = fileName,
-            selectedLimitBytes = ImportKind.DSL_DZ.selectedInputLimitBytes,
-        )
-        val text = try {
-            dslDzExtractor.extractToText(bytes)
-        } catch (cause: OutOfMemoryError) {
+        val size = file.length()
+        if (size > ImportKind.DSL_DZ.selectedInputLimitBytes) {
             throw ImportFileTooLargeException(
-                "The decompressed DSL text could not be loaded in memory. Android MVP decompressed DSL text " +
-                    "limit is ${MAX_ANDROID_DECOMPRESSED_DSL_TEXT_BYTES.toMiBString()}; selected file was " +
-                    "${file.length().toMiBString()}.",
-                cause,
+                fileTooLargeMessage(size, ImportKind.DSL_DZ.selectedInputLimitBytes),
             )
         }
-        val result = dictionaryImporter.importDslText(
-            sourceFileName = fileName,
-            text = text,
-            progress = ::onImportProgress,
-        )
-        return "Imported ${result.dictionaryName}: ${result.entryCount} entries, ${result.skippedCount} skipped."
+        diagnostics.selectedFileBytes = size
+
+        val result = file.inputStream().use { input ->
+            dslDzTextStream.open(input, compressedByteCount = size).use { streamingText ->
+                diagnostics.detectedEncoding = streamingText.encoding.displayName
+                val lines = streamingText.lines.onEach {
+                    diagnostics.decompressedDslBytes = streamingText.counters.decompressedByteCount
+                    diagnostics.decompressedDslChars = streamingText.counters.decompressedCharCount
+                }
+                try {
+                    dictionaryImporter.importDslLines(
+                        sourceFileName = fileName,
+                        lines = lines,
+                        progress = progressLogger(diagnostics),
+                    )
+                } finally {
+                    diagnostics.decompressedDslBytes = streamingText.counters.decompressedByteCount
+                    diagnostics.decompressedDslChars = streamingText.counters.decompressedCharCount
+                }
+            }
+        }
+        diagnostics.dictionaryName = result.dictionaryName
+        diagnostics.importedEntryCount = result.entryCount
+        return result.importSuccessMessage()
     }
 
-    private fun importTarBz2(fileName: String, file: File): String {
+    private fun importTarBz2(fileName: String, file: File, diagnostics: ImportDiagnostics): String {
         val bytes = file.readImportBytes(
             fileName = fileName,
             selectedLimitBytes = ImportKind.TAR_BZ2.selectedInputLimitBytes,
         )
+        diagnostics.selectedFileBytes = bytes.size.toLong()
         val result = packageImporter.importTarBz2Package(
             sourceFileName = fileName,
             bytes = bytes,
@@ -266,6 +297,19 @@ class AndroidPocketDslAppModel(context: Context) {
             "${result.failedDictionaryCount}. Ignored files: ${result.ignoredFileCount}."
     }
 
+    private fun progressLogger(diagnostics: ImportDiagnostics): (ImportProgress) -> Unit = { progress ->
+        when (progress) {
+            is ImportProgress.ParsingDictionary -> {
+                diagnostics.dictionaryName = progress.dictionaryName ?: diagnostics.dictionaryName
+            }
+            is ImportProgress.Indexing -> {
+                diagnostics.importedEntryCount = progress.processedEntries
+            }
+            else -> Unit
+        }
+        onImportProgress(progress)
+    }
+
     private fun onImportProgress(progress: ImportProgress) {
         val message = when (progress) {
             ImportProgress.Started -> "Starting import..."
@@ -279,6 +323,17 @@ class AndroidPocketDslAppModel(context: Context) {
             is ImportProgress.Failed -> "Import failed: ${progress.message}"
         }
         updateState { it.copy(importMessage = message) }
+    }
+
+    private fun ImportResult.importSuccessMessage(): String {
+        val warningSummary = warnings
+            .takeIf { it.isNotEmpty() }
+            ?.joinToString(prefix = " Warnings: ") { warning ->
+                "${warning.count} ${warning.reason.name.lowercase()}."
+            }
+            ?: ""
+
+        return "Imported $dictionaryName: $entryCount entries, $skippedCount skipped.$warningSummary"
     }
 
     private fun onPackageImportProgress(progress: PackageImportProgress) {
@@ -434,10 +489,24 @@ class AndroidPocketDslAppModel(context: Context) {
         }
     }
 
-    private fun friendlyError(cause: Throwable): String =
+    private fun friendlyError(cause: Throwable, diagnostics: ImportDiagnostics): String =
         when (cause) {
-            is ImportFileTooLargeException -> "Import failed: ${cause.message}"
-            is DslDzExtractionException -> "Import failed: ${formatByteLimits(cause.message)}"
+            is ImportFileTooLargeException -> when (cause.stage) {
+                ImportSizeFailureStage.SELECTED_FILE_TOO_LARGE -> {
+                    "Import failed: selected file too large. ${cause.message}"
+                }
+                ImportSizeFailureStage.DECOMPRESSED_DSL_TOO_LARGE -> {
+                    "Import failed: decompressed DSL too large. ${cause.message}"
+                }
+            }
+            is DslDzExtractionException -> "Import failed: ${friendlyDslDzError(cause)}"
+            is DslTextDecodingException -> "Import failed: decoding failed. ${cause.message}"
+            is DictionaryImportException -> when (cause.stage) {
+                DictionaryImportStage.DATABASE_INSERT -> {
+                    "Import failed: database insert failure after ${diagnostics.importedEntryCount} imported entries. " +
+                        cause.sanitizedMessage("The dictionary could not be saved.")
+                }
+            }
             is ArchiveExtractionException -> "Import failed: ${formatByteLimits(cause.message)}"
             is SecurityException -> {
                 "Import failed: Android denied access to the selected file. Re-open it from the file picker and try again."
@@ -449,13 +518,32 @@ class AndroidPocketDslAppModel(context: Context) {
                 "Import failed: Could not read the selected file. Re-open it from the file picker and try again."
             }
             is OutOfMemoryError -> {
-                "Import failed: The selected file is too large for this device. Android MVP limits are " +
+                "Import failed: unexpected importer failure: the file could not be loaded in memory. Android MVP limits are " +
                     "${MAX_ANDROID_SELECTED_DSL_DZ_BYTES.toMiBString()} selected compressed input and " +
                     "${MAX_ANDROID_DECOMPRESSED_DSL_TEXT_BYTES.toMiBString()} decompressed DSL text."
             }
-            else -> cause.message?.takeIf { it.isNotBlank() }?.let { "Import failed: $it" }
-                ?: "Import failed. The selected file could not be imported."
+            else -> "Import failed: unexpected importer failure. " +
+                cause.sanitizedMessage("The selected file could not be imported.")
         }
+
+    private fun friendlyDslDzError(cause: DslDzExtractionException): String {
+        val message = cause.message.orEmpty()
+        return when {
+            message.contains("compressed input exceeds limit", ignoreCase = true) -> {
+                "selected file too large. ${formatByteLimits(message)}"
+            }
+            message.contains("decompressed output exceeds limit", ignoreCase = true) -> {
+                "decompressed DSL too large. ${formatByteLimits(message)}"
+            }
+            message.contains("Invalid DSL.DZ gzip data", ignoreCase = true) -> {
+                "invalid gzip/dictzip data. The selected .dsl.dz file could not be decompressed."
+            }
+            message.contains("not valid UTF-8 or UTF-16", ignoreCase = true) -> {
+                "decoding failed. Decompressed DSL text is not valid UTF-8 or UTF-16 with BOM."
+            }
+            else -> formatByteLimits(message.takeIf { it.isNotBlank() })
+        }
+    }
 
     private fun copyUriToCache(
         contentResolver: ContentResolver,
@@ -535,7 +623,7 @@ class AndroidPocketDslAppModel(context: Context) {
             throw ImportFileTooLargeException(
                 "The selected file is ${size.toMiBString()}, which could not be loaded in memory. " +
                     "Android MVP selected input limit is ${selectedLimitBytes.toMiBString()}.",
-                cause,
+                cause = cause,
             )
         }
     }
@@ -642,6 +730,54 @@ class AndroidPocketDslAppModel(context: Context) {
         )
     }
 
+    private fun logImportStarted(diagnostics: ImportDiagnostics) {
+        Log.i(
+            LOG_TAG,
+            "Import started: ${diagnostics.toLogFields()}",
+        )
+    }
+
+    private fun logImportSucceeded(diagnostics: ImportDiagnostics) {
+        Log.i(
+            LOG_TAG,
+            "Import succeeded: ${diagnostics.toLogFields()}",
+        )
+    }
+
+    private fun logImportFailure(cause: Throwable, diagnostics: ImportDiagnostics) {
+        Log.e(
+            LOG_TAG,
+            "Import failed: ${diagnostics.toLogFields()} exception=${cause::class.java.name} " +
+                "message=${cause.sanitizedMessage("<none>")}",
+            cause,
+        )
+    }
+
+    private fun ImportDiagnostics.toLogFields(): String =
+        "kind=${importKind?.displayName ?: "unknown"} " +
+            "fileName=${fileName.sanitizedLogValue()} " +
+            "reportedSelectedBytes=${reportedSelectedBytes ?: "unknown"} " +
+            "selectedFileBytes=${selectedFileBytes ?: "unknown"} " +
+            "decompressedDslBytes=${decompressedDslBytes ?: "unknown"} " +
+            "decompressedDslChars=${decompressedDslChars ?: "unknown"} " +
+            "encoding=${detectedEncoding ?: "unknown"} " +
+            "dictionaryName=${dictionaryName.sanitizedLogValue()} " +
+            "importedEntryCount=$importedEntryCount"
+
+    private fun Throwable.sanitizedMessage(fallback: String): String =
+        message
+            ?.replace(Regex("[\\r\\n\\t]+"), " ")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: fallback
+
+    private fun String?.sanitizedLogValue(): String =
+        this
+            ?.replace(Regex("[\\r\\n\\t]+"), " ")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: "unknown"
+
     private fun Long.toMiBString(): String {
         val mib = this / BYTES_PER_MIB
         val remainder = ((this % BYTES_PER_MIB) * 10L) / BYTES_PER_MIB
@@ -666,14 +802,26 @@ class AndroidPocketDslAppModel(context: Context) {
         val sizeBytes: Long? = null,
     )
 
-    private enum class ImportKind {
-        DSL {
+    private data class ImportDiagnostics(
+        var importKind: ImportKind? = null,
+        var fileName: String? = null,
+        var reportedSelectedBytes: Long? = null,
+        var selectedFileBytes: Long? = null,
+        var decompressedDslBytes: Long? = null,
+        var decompressedDslChars: Long? = null,
+        var detectedEncoding: String? = null,
+        var dictionaryName: String? = null,
+        var importedEntryCount: Long = 0,
+    )
+
+    private enum class ImportKind(val displayName: String) {
+        DSL(".dsl") {
             override val selectedInputLimitBytes: Long = MAX_ANDROID_SELECTED_DSL_BYTES
         },
-        DSL_DZ {
+        DSL_DZ(".dsl.dz") {
             override val selectedInputLimitBytes: Long = MAX_ANDROID_SELECTED_DSL_DZ_BYTES
         },
-        TAR_BZ2 {
+        TAR_BZ2(".tar.bz2") {
             override val selectedInputLimitBytes: Long = MAX_ANDROID_SELECTED_TAR_BZ2_BYTES
         },
         ;
@@ -693,8 +841,14 @@ class AndroidPocketDslAppModel(context: Context) {
 
     private class ImportFileTooLargeException(
         message: String,
+        val stage: ImportSizeFailureStage = ImportSizeFailureStage.SELECTED_FILE_TOO_LARGE,
         cause: Throwable? = null,
     ) : Exception(message, cause)
+
+    private enum class ImportSizeFailureStage {
+        SELECTED_FILE_TOO_LARGE,
+        DECOMPRESSED_DSL_TOO_LARGE,
+    }
 
     private companion object {
         const val LOG_TAG = "PocketDsl"

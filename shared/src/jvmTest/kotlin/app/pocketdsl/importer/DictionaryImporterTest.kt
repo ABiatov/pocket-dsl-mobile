@@ -133,6 +133,38 @@ class DictionaryImporterTest {
     }
 
     @Test
+    fun streamingImportProcessesManyEntriesInBatches() {
+        val repository = newRepository()
+        val importer = DictionaryImporter(
+            repository = repository,
+            limits = ImportLimits(insertBatchSize = 100),
+            currentTimeMillis = { 42 },
+        )
+        val entryCount = 2_500
+        val lines = sequence {
+            yield("#NAME \"Many Streaming Entries\"")
+            yield("#INDEX_LANGUAGE \"English\"")
+            yield("#CONTENTS_LANGUAGE \"Russian\"")
+            yield("")
+            repeat(entryCount) { index ->
+                yield("word$index")
+                yield(" [trn]value$index[/trn]")
+            }
+        }
+
+        val result = importer.importDslLines(
+            sourceFileName = "many.dsl",
+            lines = lines,
+        )
+
+        assertEquals("Many Streaming Entries", result.dictionaryName)
+        assertEquals(entryCount.toLong(), result.entryCount)
+        assertEquals(0, result.skippedCount)
+        assertEquals("word0", repository.lookupExact("WORD0").single().headword)
+        assertEquals("word2499", repository.lookupExact("WORD2499").single().headword)
+    }
+
+    @Test
     fun skipsOversizedEntries() {
         val repository = newRepository()
         val importer = DictionaryImporter(
@@ -161,9 +193,39 @@ class DictionaryImporterTest {
 
         assertEquals(1, result.entryCount)
         assertEquals(2, result.skippedCount)
+        assertEquals(
+            listOf(ImportWarningReason.ARTICLE_RAW_TOO_LARGE, ImportWarningReason.HEADWORD_TOO_LONG),
+            result.warnings.map { it.reason },
+        )
         assertEquals("ok", repository.lookupExact("ok").single().headword)
         assertTrue(repository.lookupExact("toolong").isEmpty())
         assertTrue(repository.lookupExact("big").isEmpty())
+    }
+
+    @Test
+    fun skipsEntriesWhenConvertedHtmlExceedsLimit() {
+        val repository = newRepository()
+        val importer = DictionaryImporter(
+            repository = repository,
+            limits = ImportLimits(maxArticleHtmlSize = 10),
+        )
+
+        val result = importer.importDslText(
+            sourceFileName = "html-limit.dsl",
+            text = """
+                #NAME "Html Limit"
+                #INDEX_LANGUAGE "English"
+                #CONTENTS_LANGUAGE "Russian"
+
+                alpha
+                 one
+            """.trimIndent(),
+        )
+
+        assertEquals(0, result.entryCount)
+        assertEquals(1, result.skippedCount)
+        assertEquals(ImportWarningReason.ARTICLE_HTML_TOO_LARGE, result.warnings.single().reason)
+        assertTrue(repository.lookupExact("alpha").isEmpty())
     }
 
     @Test
